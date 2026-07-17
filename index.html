@@ -22,17 +22,101 @@
     <meta name="twitter:title" content="PDF Coordinates - Free Offline Tool" />
     <meta name="twitter:description" content="Find and annotate precise X/Y coordinates on your PDFs. Runs entirely in your browser. Free." />
 
+    <!-- Apply the saved/system theme before first paint so there is no flash. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('theme');
+          var dark = saved
+            ? saved === 'dark'
+            : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
+
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Semantic colour tokens -> CSS variables, so light/dark is defined in one place.
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              canvas:   'rgb(var(--c-canvas) / <alpha-value>)',
+              surface:  'rgb(var(--c-surface) / <alpha-value>)',
+              elevated: 'rgb(var(--c-elevated) / <alpha-value>)',
+              raised:   'rgb(var(--c-raised) / <alpha-value>)',
+              line:     'rgb(var(--c-line) / <alpha-value>)',
+              'line-strong': 'rgb(var(--c-line-strong) / <alpha-value>)',
+              strong:   'rgb(var(--c-strong) / <alpha-value>)',
+              body:     'rgb(var(--c-body) / <alpha-value>)',
+              muted:    'rgb(var(--c-muted) / <alpha-value>)',
+              faint:    'rgb(var(--c-faint) / <alpha-value>)',
+              fainter:  'rgb(var(--c-fainter) / <alpha-value>)',
+              accent:   'rgb(var(--c-accent) / <alpha-value>)',
+              'accent-hi': 'rgb(var(--c-accent-hi) / <alpha-value>)',
+              danger:   'rgb(var(--c-danger) / <alpha-value>)',
+            },
+          },
+        },
+      };
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Homemade+Apple&family=Dancing+Script:wght@400;600&family=Caveat:wght@400;600&display=swap" rel="stylesheet">
     <style>
       body { font-family: 'Inter', sans-serif; }
+
+      /* ---- Theme tokens (RGB triplets so Tailwind /opacity works) ---- */
+      :root {
+        --c-canvas: 226 232 240;      /* slate-200 */
+        --c-surface: 255 255 255;     /* white     */
+        --c-elevated: 241 245 249;    /* slate-100 */
+        --c-raised: 226 232 240;      /* slate-200 */
+        --c-line: 226 232 240;        /* slate-200 */
+        --c-line-strong: 203 213 225; /* slate-300 */
+        --c-strong: 15 23 42;         /* slate-900 */
+        --c-body: 51 65 85;           /* slate-700 */
+        --c-muted: 71 85 105;         /* slate-600 */
+        --c-faint: 100 116 139;       /* slate-500 */
+        --c-fainter: 148 163 184;     /* slate-400 */
+        --c-accent: 79 70 229;        /* indigo-600 */
+        --c-accent-hi: 67 56 202;     /* indigo-700 */
+        --c-danger: 220 38 38;        /* red-600    */
+        --c-dot: #cbd5e1;             /* canvas dot grid */
+        --c-sb-track: #e2e8f0;
+        --c-sb-thumb: #cbd5e1;
+        --c-sb-thumb-hover: #94a3b8;
+      }
+      .dark {
+        --c-canvas: 2 6 23;           /* slate-950 */
+        --c-surface: 15 23 42;        /* slate-900 */
+        --c-elevated: 30 41 59;       /* slate-800 */
+        --c-raised: 51 65 85;         /* slate-700 */
+        --c-line: 30 41 59;           /* slate-800 */
+        --c-line-strong: 51 65 85;    /* slate-700 */
+        --c-strong: 255 255 255;      /* white     */
+        --c-body: 203 213 225;        /* slate-300 */
+        --c-muted: 148 163 184;       /* slate-400 */
+        --c-faint: 100 116 139;       /* slate-500 */
+        --c-fainter: 71 85 105;       /* slate-600 */
+        --c-accent: 129 140 248;      /* indigo-400 */
+        --c-accent-hi: 165 180 252;   /* indigo-300 */
+        --c-danger: 248 113 113;      /* red-400    */
+        --c-dot: #1e293b;
+        --c-sb-track: #1e293b;
+        --c-sb-thumb: #475569;
+        --c-sb-thumb-hover: #64748b;
+      }
+
       /* Custom scrollbar for sidebar */
       ::-webkit-scrollbar { width: 6px; height: 6px; }
-      ::-webkit-scrollbar-track { background: #1e293b; }
-      ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-      ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+      ::-webkit-scrollbar-track { background: var(--c-sb-track); }
+      ::-webkit-scrollbar-thumb { background: var(--c-sb-thumb); border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--c-sb-thumb-hover); }
       
       .pdf-page-container .react-pdf__Page__canvas {
         margin: 0 auto;
@@ -73,9 +157,8 @@
   }
 }
 </script>
-<link rel="stylesheet" href="/index.css">
 </head>
-  <body class="bg-slate-900 text-slate-100 antialiased overflow-hidden">
+  <body class="bg-surface text-body antialiased overflow-hidden">
     <div id="root"></div>
     
     <!-- Hidden SEO Content to help discovery -->

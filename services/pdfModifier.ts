@@ -1,6 +1,16 @@
 import { PDFDocument, rgb, StandardFonts, PDFPage, PDFFont } from 'pdf-lib';
 import { AnnotationPoint, ElementType } from '../types';
 
+// Turn user input into a safe download filename ending in .pdf.
+export const toSafePdfFileName = (name: string): string => {
+  const cleaned = name
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, '_') // characters filesystems reject
+    .replace(/\.pdf$/i, '')        // avoid "foo.pdf.pdf"
+    .trim();
+  return `${cleaned || 'document'}.pdf`;
+};
+
 // Convert a hex color string (#rrggbb / #rgb) to a pdf-lib rgb() color.
 const hexToRgb = (hex: string) => {
   let h = hex.replace('#', '').trim();
@@ -110,6 +120,23 @@ export const saveAnnotatedPdf = async (
     const pages = pdfDoc.getPages();
     const textFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
+    // Embed each distinct signature image once, then reuse across placements.
+    const signatureCache = new Map<string, any>();
+    const uniqueSignatures = Array.from(
+      new Set(
+        annotations
+          .filter((a) => a.type === ElementType.SIGNATURE && a.imageData)
+          .map((a) => a.imageData as string)
+      )
+    );
+    for (const dataUrl of uniqueSignatures) {
+      try {
+        signatureCache.set(dataUrl, await pdfDoc.embedPng(dataUrl));
+      } catch (err) {
+        console.error('Failed to embed signature image:', err);
+      }
+    }
+
     // Group annotations by page
     const annotationsByPage: Record<number, AnnotationPoint[]> = {};
     annotations.forEach((ann) => {
@@ -137,6 +164,20 @@ export const saveAnnotatedPdf = async (
           case ElementType.TEXT:
             drawTextElement(page, ann, textFont);
             break;
+          case ElementType.SIGNATURE: {
+            const png = ann.imageData ? signatureCache.get(ann.imageData) : null;
+            if (!png) break;
+            // Anchor is the centre of the image, matching the on-screen rendering.
+            const w = ann.size;
+            const h = ann.aspectRatio ? ann.size / ann.aspectRatio : ann.size;
+            page.drawImage(png, {
+              x: ann.x - w / 2,
+              y: ann.y - h / 2,
+              width: w,
+              height: h,
+            });
+            break;
+          }
         }
       });
     });
@@ -145,7 +186,7 @@ export const saveAnnotatedPdf = async (
     const blob = new Blob([modifiedPdfBytes], { type: 'application/pdf' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `annotated_${fileName}`;
+    link.download = toSafePdfFileName(fileName);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

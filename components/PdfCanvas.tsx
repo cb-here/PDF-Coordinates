@@ -5,6 +5,9 @@ import {
   AnnotationPoint,
   ElementType,
   PageDimensions,
+  SavedSignature,
+  Tool,
+  HAND_TOOL,
   DEFAULT_SIZES,
   DEFAULT_COLORS,
 } from '../types';
@@ -20,7 +23,8 @@ interface PdfCanvasProps {
   selectedId: string | null;
   hoveredId: string | null;
   isPanning: boolean;
-  activeTool: ElementType;
+  activeTool: Tool;
+  savedSignature: SavedSignature | null;
   onAddAnnotation: (ann: AnnotationPoint) => void;
   onSelectAnnotation: (id: string) => void;
   onHoverAnnotation: (id: string | null) => void;
@@ -40,6 +44,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   hoveredId,
   isPanning,
   activeTool,
+  savedSignature,
   onAddAnnotation,
   onSelectAnnotation,
   onHoverAnnotation,
@@ -70,11 +75,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     startX: number;
     startY: number;
     initialSize: number;
+    isSignature: boolean;
     committed: boolean;
   } | null>(null);
 
   const MIN_SIZE = 6;
   const MAX_SIZE = 200;
+  const MAX_SIGNATURE_SIZE = 400;
 
   // Filter annotations for this page
   const pageAnnotations = annotations.filter((a) => a.pageIndex === pageNumber);
@@ -134,8 +141,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       const dy = e.clientY - resizeState.startY;
       const delta = (Math.abs(dx) > Math.abs(dy) ? dx : dy) / scale;
 
+      const maxSize = resizeState.isSignature ? MAX_SIGNATURE_SIZE : MAX_SIZE;
       let newSize = resizeState.initialSize + delta;
-      newSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, newSize));
+      newSize = Math.max(MIN_SIZE, Math.min(maxSize, newSize));
 
       if (!resizeState.committed && Math.abs(delta) > 1) {
         onBeginGesture(); // one undo entry for the whole resize
@@ -168,16 +176,23 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       startX: e.clientX,
       startY: e.clientY,
       initialSize: ann.size,
+      isSignature: ann.type === ElementType.SIGNATURE,
       committed: false,
     });
   };
 
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
+      // Hand tool is view-only — never place anything.
+      if (activeTool === HAND_TOOL) return;
+
       // Prevent adding element if we are panning or just finished a drag
       if (isPanning) return;
       if (Date.now() - lastDragEndTime.current < 150) return;
       if (editingId) return;
+
+      // Signature tool with nothing created yet: nothing to place.
+      if (activeTool === ElementType.SIGNATURE && !savedSignature) return;
 
       if (!containerRef.current) return;
 
@@ -207,6 +222,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         size: DEFAULT_SIZES[activeTool],
         color: DEFAULT_COLORS[activeTool],
         text: activeTool === ElementType.TEXT ? 'Text' : undefined,
+        imageData: activeTool === ElementType.SIGNATURE ? savedSignature!.dataUrl : undefined,
+        aspectRatio: activeTool === ElementType.SIGNATURE ? savedSignature!.aspectRatio : undefined,
       };
 
       onAddAnnotation(newAnnotation);
@@ -216,12 +233,15 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         setEditingId(newId);
       }
     },
-    [pageNumber, scale, onAddAnnotation, isPanning, activeTool, editingId]
+    [pageNumber, scale, onAddAnnotation, isPanning, activeTool, editingId, savedSignature]
   );
 
   const handleAnnotationMouseDown = (e: React.MouseEvent, ann: AnnotationPoint) => {
-    e.stopPropagation();
+    // While panning (Hand tool / Space held), let the event bubble to the viewport
+    // so it can pan — do NOT swallow it here.
     if (isPanning) return;
+
+    e.stopPropagation();
     if (editingId === ann.id) return; // Don't drag while editing text
 
     onSelectAnnotation(ann.id);
@@ -259,12 +279,18 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   else if (isPanning) cursorStyle = 'cursor-grab';
 
   const toolHint =
-    activeTool === ElementType.TICK
+    activeTool === HAND_TOOL
+      ? ''
+      : activeTool === ElementType.TICK
       ? 'Click to place tick'
       : activeTool === ElementType.CROSS
       ? 'Click to place cross'
       : activeTool === ElementType.CIRCLE
       ? 'Click to place circle'
+      : activeTool === ElementType.SIGNATURE
+      ? savedSignature
+        ? 'Click to place signature'
+        : 'Create a signature first'
       : 'Click to add text';
 
   return (
@@ -290,7 +316,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           className="pointer-events-none absolute z-50 flex flex-col items-start"
           style={{ left: hoverPos.x, top: hoverPos.y }}
         >
-          <div className="ml-4 mt-4 bg-slate-800/90 text-white text-[10px] px-2 py-1 rounded shadow border border-slate-600 backdrop-blur-sm whitespace-nowrap">
+          <div className="ml-4 mt-4 bg-elevated/90 text-strong text-[10px] px-2 py-1 rounded shadow border border-line-strong backdrop-blur-sm whitespace-nowrap">
             {toolHint}
           </div>
         </div>
@@ -306,8 +332,17 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         // Screen-space (scaled) size for glyphs / text
         const scaledSize = ann.size * scale;
 
+        // Box dimensions in screen space. Glyphs are square; a signature keeps
+        // its aspect ratio (size is the width).
+        const boxW = scaledSize;
+        const boxH =
+          ann.type === ElementType.SIGNATURE && ann.aspectRatio
+            ? scaledSize / ann.aspectRatio
+            : scaledSize;
+
         // Transparent grab area so small glyphs are easy to click & drag.
-        const hitSize = Math.max(scaledSize + 12, 22);
+        const hitW = Math.max(boxW + 12, 22);
+        const hitH = Math.max(boxH + 12, 22);
 
         return (
           <div
@@ -321,7 +356,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               top: ann.displayY * scale,
             }}
           >
-            {/* Grab / hit area (only for glyphs; TEXT handles its own hits) */}
+            {/* Grab / hit area (only for glyphs; TEXT handles its own hits).
+                Ignores the mouse entirely while panning so the Hand tool can drag. */}
             {ann.type !== ElementType.TEXT && (
               <div
                 onMouseDown={(e) => handleAnnotationMouseDown(e, ann)}
@@ -329,32 +365,32 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 onMouseEnter={() => onHoverAnnotation(ann.id)}
                 onMouseLeave={() => onHoverAnnotation(null)}
                 className={`absolute -translate-x-1/2 -translate-y-1/2 ${
-                  isDragging ? 'cursor-grabbing' : isPanning ? 'cursor-grab' : 'cursor-move'
-                }`}
-                style={{ width: hitSize, height: hitSize }}
+                  isDragging ? 'cursor-grabbing' : 'cursor-move'
+                } ${isPanning ? 'pointer-events-none' : ''}`}
+                style={{ width: hitW, height: hitH }}
               />
             )}
 
-            {/* Selection / hover ring for glyph elements */}
+            {/* Selection / hover ring for glyph + signature elements */}
             {ann.type !== ElementType.TEXT && (isSelected || isHovered || isDragging) && (
               <div
                 className="absolute -translate-x-1/2 -translate-y-1/2 rounded border-2 border-indigo-400/70 bg-indigo-400/10 pointer-events-none"
                 style={{
-                  width: Math.max(scaledSize + 12, 20),
-                  height: Math.max(scaledSize + 12, 20),
+                  width: Math.max(boxW + 12, 20),
+                  height: Math.max(boxH + 12, 20),
                 }}
               />
             )}
 
-            {/* Resize handle (bottom-right corner of the selection box) for glyphs */}
+            {/* Resize handle (bottom-right corner of the selection box) */}
             {ann.type !== ElementType.TEXT && isSelected && !isDragging && (
               <div
                 onMouseDown={(e) => handleResizeMouseDown(e, ann)}
                 onClick={(e) => e.stopPropagation()}
-                className="absolute w-2.5 h-2.5 -translate-y-1/2 rounded-sm bg-white border-2 border-indigo-500 shadow cursor-nwse-resize"
+                className="absolute w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm bg-white border-2 border-indigo-500 shadow cursor-nwse-resize"
                 style={{
-                  left: Math.max(scaledSize + 12, 20) / 2 - 1,
-                  top: Math.max(scaledSize + 12, 20) / 2 - 1,
+                  left: Math.max(boxW + 12, 20) / 2,
+                  top: Math.max(boxH + 12, 20) / 2,
                 }}
               />
             )}
@@ -383,6 +419,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                 style={{ width: scaledSize, height: scaledSize, color: ann.color }}
                 strokeWidth={2}
+              />
+            )}
+
+            {/* ---- SIGNATURE ---- */}
+            {ann.type === ElementType.SIGNATURE && ann.imageData && (
+              <img
+                src={ann.imageData}
+                alt="Signature"
+                draggable={false}
+                className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none select-none"
+                // maxWidth/maxHeight none: this wrapper has no intrinsic width, so
+                // Tailwind preflight's `img { max-width: 100% }` would clamp it to 0.
+                style={{ width: boxW, height: boxH, maxWidth: 'none', maxHeight: 'none' }}
               />
             )}
 
@@ -423,8 +472,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                   onMouseEnter={() => onHoverAnnotation(ann.id)}
                   onMouseLeave={() => onHoverAnnotation(null)}
                   className={`absolute whitespace-pre leading-tight font-sans rounded ${
-                    isDragging ? 'cursor-grabbing' : isPanning ? 'cursor-grab' : 'cursor-move'
-                  } ${isSelected || isHovered ? 'ring-2 ring-indigo-400/70 bg-indigo-400/5' : ''}`}
+                    isDragging ? 'cursor-grabbing' : 'cursor-move'
+                  } ${isPanning ? 'pointer-events-none' : ''} ${
+                    isSelected || isHovered ? 'ring-2 ring-indigo-400/70 bg-indigo-400/5' : ''
+                  }`}
                   style={{
                     left: 0,
                     top: 0,
